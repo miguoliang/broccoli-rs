@@ -1,0 +1,10 @@
+name: broccoli-rs
+services:
+  postgres: # Database
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: broccoli_rs
+      POSTGRES_USER: username
+      POSTGRES_PASSWORD: password
