@@ -3,10 +3,10 @@
 diesel::table! {
     edge (id) {
         id -> Int4,
-        from_vertex_id -> Nullable<Int4>,
+        from_vertex_id -> Int4,
         #[max_length = 255]
         from_vertex_type -> Varchar,
-        to_vertex_id -> Nullable<Int4>,
+        to_vertex_id -> Int4,
         #[max_length = 255]
         to_vertex_type -> Varchar,
         #[max_length = 255]
