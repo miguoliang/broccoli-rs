@@ -1,9 +1,9 @@
 
 CREATE TABLE edge (
     id SERIAL PRIMARY KEY,
-    from_vertex_id INT NOT NULL REFERENCES vertex(id),
+    from_vertex_id INT NOT NULL REFERENCES vertex(id) ON DELETE CASCADE,
     from_vertex_type VARCHAR(255) NOT NULL,
-    to_vertex_id INT NOT NULL REFERENCES vertex(id),
+    to_vertex_id INT NOT NULL REFERENCES vertex(id) ON DELETE CASCADE,
     to_vertex_type VARCHAR(255) NOT NULL,
     label VARCHAR(255) NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
