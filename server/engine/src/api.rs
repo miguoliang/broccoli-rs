@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::{
     dto::{InsertableNewEdge, InsertableNewVertex, NewEdge, NewVertex},
     error::Error,
@@ -6,7 +8,7 @@ use crate::{
 use diesel::{ExpressionMethods, QueryDsl, SelectableHelper};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 
-async fn create_vertex(
+pub async fn create_vertex(
     conn: &mut AsyncPgConnection,
     new_vertex: &NewVertex,
 ) -> Result<Vertex, Error> {
@@ -28,7 +30,7 @@ async fn create_vertex(
     Ok(result)
 }
 
-async fn create_edge(conn: &mut AsyncPgConnection, new_edge: &NewEdge) -> Result<Edge, Error> {
+pub async fn create_edge(conn: &mut AsyncPgConnection, new_edge: &NewEdge) -> Result<Edge, Error> {
     use crate::schema::edge::dsl::*;
     use crate::schema::vertex::dsl::*;
     use crate::schema::vertex::id as VertexId;
@@ -59,6 +61,77 @@ async fn create_edge(conn: &mut AsyncPgConnection, new_edge: &NewEdge) -> Result
         .values(&new_edge)
         .returning(Edge::as_returning())
         .get_result(conn)
+        .await?;
+
+    Ok(result)
+}
+
+pub async fn create_edges(
+    conn: &mut AsyncPgConnection,
+    new_edges: &[NewEdge],
+) -> Result<Vec<Edge>, Error> {
+    use crate::schema::edge::dsl::*;
+
+    let mut id_type_map = HashMap::new();
+    for new_edge in new_edges {
+        let source_vertex = match get_vertex_by_id(conn, new_edge.from_vertex_id).await {
+            Ok(source_vertex) => source_vertex,
+            Err(_) => {
+                return Err(Error::Validation(validator::ValidationErrors::new()));
+            }
+        };
+        let target_vertex = match get_vertex_by_id(conn, new_edge.to_vertex_id).await {
+            Ok(target_vertex) => target_vertex,
+            Err(_) => {
+                return Err(Error::Validation(validator::ValidationErrors::new()));
+            }
+        };
+        id_type_map.insert(new_edge.from_vertex_id, source_vertex.type_.clone());
+        id_type_map.insert(new_edge.to_vertex_id, target_vertex.type_.clone());
+    }
+
+    let new_edges = new_edges
+        .iter()
+        .map(|new_edge| InsertableNewEdge {
+            from_vertex_id: new_edge.from_vertex_id,
+            from_vertex_type: id_type_map.get(&new_edge.from_vertex_id).unwrap().clone(),
+            to_vertex_id: new_edge.to_vertex_id,
+            to_vertex_type: id_type_map.get(&new_edge.to_vertex_id).unwrap().clone(),
+            label: new_edge.label.clone(),
+            created_by: new_edge.created_by.clone(),
+            updated_by: new_edge.created_by.clone(),
+        })
+        .collect::<Vec<_>>();
+
+    let result = diesel::insert_into(edge)
+        .values(&new_edges)
+        .returning(Edge::as_returning())
+        .get_results(conn)
+        .await?;
+
+    Ok(result)
+}
+
+async fn create_vertices(
+    conn: &mut AsyncPgConnection,
+    new_vertices: &[NewVertex],
+) -> Result<Vec<Vertex>, Error> {
+    use crate::schema::vertex::dsl::*;
+
+    let new_vertices = new_vertices
+        .iter()
+        .map(|new_vertex| InsertableNewVertex {
+            name: new_vertex.name.clone(),
+            type_: new_vertex.type_.clone(),
+            created_by: new_vertex.created_by.clone(),
+            updated_by: new_vertex.created_by.clone(),
+        })
+        .collect::<Vec<_>>();
+
+    let result = diesel::insert_into(vertex)
+        .values(&new_vertices)
+        .returning(Vertex::as_returning())
+        .get_results(conn)
         .await?;
 
     Ok(result)
@@ -268,5 +341,97 @@ mod tests {
             .first::<i32>(&mut conn)
             .await
             .expect_err("edge should be deleted");
+    }
+
+    #[tokio::test]
+    async fn test_create_vertices() {
+        dotenvy::from_path(".env").ok();
+
+        let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+
+        let new_vertices = vec![
+            NewVertex {
+                name: "create_vertices_1".to_string(),
+                type_: "create_vertices_1".to_string(),
+                created_by: "test".to_string(),
+            },
+            NewVertex {
+                name: "create_vertices_2".to_string(),
+                type_: "create_vertices_2".to_string(),
+                created_by: "test".to_string(),
+            },
+        ];
+
+        let mut conn = AsyncPgConnection::establish(&database_url).await.unwrap();
+        let result = crate::api::create_vertices(&mut conn, &new_vertices)
+            .await
+            .unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].name, "create_vertices_1");
+        assert_eq!(result[0].type_, "create_vertices_1");
+        assert_eq!(result[0].created_by, "test");
+        assert_eq!(result[1].name, "create_vertices_2");
+        assert_eq!(result[1].type_, "create_vertices_2");
+        assert_eq!(result[1].created_by, "test");
+    }
+
+    #[tokio::test]
+    async fn test_create_edges() {
+        dotenvy::from_path(".env").ok();
+
+        let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+
+        let source_vertex = NewVertex {
+            name: "create_edges_source_vertex".to_string(),
+            type_: "create_edges_source_vertex".to_string(),
+            created_by: "test".to_string(),
+        };
+
+        let target_vertex = NewVertex {
+            name: "create_edges_target_vertex".to_string(),
+            type_: "create_edges_target_vertex".to_string(),
+            created_by: "test".to_string(),
+        };
+
+        let mut conn = AsyncPgConnection::establish(&database_url).await.unwrap();
+        let source_vertex = crate::api::create_vertex(&mut conn, &source_vertex)
+            .await
+            .unwrap();
+
+        let target_vertex = crate::api::create_vertex(&mut conn, &target_vertex)
+            .await
+            .unwrap();
+
+        let new_edges = vec![
+            crate::dto::NewEdge {
+                from_vertex_id: source_vertex.id,
+                to_vertex_id: target_vertex.id,
+                label: "create_edges_1".to_string(),
+                created_by: "test".to_string(),
+            },
+            crate::dto::NewEdge {
+                from_vertex_id: target_vertex.id,
+                to_vertex_id: source_vertex.id,
+                label: "create_edges_2".to_string(),
+                created_by: "test".to_string(),
+            },
+        ];
+
+        let result = crate::api::create_edges(&mut conn, &new_edges)
+            .await
+            .unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].from_vertex_id, source_vertex.id);
+        assert_eq!(result[0].from_vertex_type, source_vertex.type_);
+        assert_eq!(result[0].to_vertex_id, target_vertex.id);
+        assert_eq!(result[0].to_vertex_type, target_vertex.type_);
+        assert_eq!(result[0].label, "create_edges_1");
+        assert_eq!(result[0].created_by, "test");
+        assert_eq!(result[1].from_vertex_id, target_vertex.id);
+        assert_eq!(result[1].from_vertex_type, target_vertex.type_);
+        assert_eq!(result[1].to_vertex_id, source_vertex.id);
+        assert_eq!(result[1].to_vertex_type, source_vertex.type_);
+        assert_eq!(result[1].label, "create_edges_2");
+        assert_eq!(result[1].created_by, "test");
     }
 }
